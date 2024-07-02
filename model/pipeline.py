@@ -1,5 +1,5 @@
 import datetime
-
+import os.path
 import dill
 import pandas as pd
 import numpy as np
@@ -12,8 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector
 from sklearn.linear_model import SGDClassifier
-from sklearn.model_selection import RandomizedSearchCV
-from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import RandomizedSearchCV, train_test_split
 
 # Metrics
 from sklearn.metrics import roc_auc_score
@@ -339,19 +338,51 @@ def main():
     ])
 
     mymodel = SGDClassifier(random_state=42, loss='log_loss', penalty='l2', n_jobs=-1)
-    # (random_state=42, loss='log_loss', class_weight={0: 0.51, 1: 17.22})
-    # #6780 loss='log_loss', class_weight={0: 0.51, 1: 17.22}
 
     pipe = Pipeline(steps=[
         ('preprocessor', preprocessor),
         ('classifier', mymodel)
     ])
 
-    train_data = pd.read_pickle('../tmp/data_to_train_api.pkl')
+    def create_final_dataframes(path_test: str, path_train: str):
+        sessions_df = pd.read_pickle("../data/ga_sessions.pkl")
+        hits_df = pd.read_pickle("../data/ga_hits.pkl")
+
+        # создание колонки о совершение одного из целевых действий
+        target_action_types = (
+        'sub_car_claim_click', 'sub_car_claim_submit_click', 'sub_open_dialog_click', 'sub_custom_question_submit_click',
+        'sub_call_number_click', 'sub_callback_submit_click', 'sub_submit_success', 'sub_car_request_submit_click')
+        hits_df['target_action'] = hits_df['event_action'].apply(lambda x: 1 if x in target_action_types else 0)
+
+        # Создадим датафрейм содержащий session_id и CR (Conversion Rate)
+        session_target_df = hits_df[['session_id', 'target_action']].groupby(['session_id'], as_index=False).max().rename(
+            columns={'target_action': 'conversion_rate'})
+
+        # Обьеденение 2 получившихся датафрейма
+        sessions_cr_df = pd.merge(sessions_df, session_target_df, on='session_id')
+
+        # Разделение датафрейма на обучающую и тестовую выборки
+        sessions_cr_df, finaltest_df = train_test_split(sessions_cr_df, test_size=0.001, random_state=42,
+                                                        stratify=sessions_cr_df['conversion_rate'])
+
+        finaltest_df.to_pickle(path_test)
+        sessions_cr_df.to_pickle(path_train)
+
+        return print(f"DF with 99% data: {path_train} 1% data to test final model {path_test}")
+
+    path_testfinaldf = "../tmp/data_to_test_api.pkl"
+    path_trainfinaldf = "../tmp/data_to_train_api.pkl"
+
+    if not os.path.isfile(path_testfinaldf) and not os.path.isfile(path_trainfinaldf):
+        create_final_dataframes(path_testfinaldf, path_trainfinaldf)
+
+    train_data = pd.read_pickle(path_trainfinaldf)
     train_target = train_data['conversion_rate']
     train_data.drop(columns=['conversion_rate'], inplace=True)
     print(train_data.shape, train_target.shape)
 
+
+    # Использую только для выявления лучших гиперпараметров
     def hyper_param_tunning(pipe, train_data, train_target):
         # При необходимости можно прогнать pipe чтобы получить модель с оптимальными настройки Гиперпараметров
         # Эта функция использовалась для настройки гиперпараметров уже выбранной модели.
@@ -381,19 +412,16 @@ def main():
         return best_model
 
 
-    # best_model = hyper_param_tunning(pipe, train_data, train_target)
-    # Result: 0.6871 {'classifier__max_iter': 3000, 'classifier__class_weight': {0: 0.5, 1: 20}, 'classifier__alpha': 0.0001}
 
     best_model = pipe.set_params(**{'classifier__max_iter': 3000,
                                   'classifier__class_weight': {0: 0.5, 1: 20},
                                   'classifier__alpha': 0.0001})
 
-
     best_model.fit(train_data, train_target)
 
 
     # Тестирование модели
-    test_df = pd.read_pickle('../tmp/data_to_test_api.pkl')
+    test_df = pd.read_pickle(path_testfinaldf)
     y = test_df['conversion_rate']
     X = test_df.drop(columns=['conversion_rate'])
 

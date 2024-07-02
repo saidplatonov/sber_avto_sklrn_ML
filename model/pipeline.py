@@ -1,5 +1,5 @@
 import datetime
-
+import os.path
 import dill
 import pandas as pd
 import numpy as np
@@ -12,6 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector
 from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import RandomizedSearchCV, train_test_split
 
 # Metrics
 from sklearn.metrics import roc_auc_score
@@ -28,6 +29,7 @@ def filter_columns(df):
                      'geo_city']]
     print("filter_columns Done")
     return df_new
+
 
 
 def empty_data_standardization(df):
@@ -126,10 +128,12 @@ def device_os_filling(df):
 
 def get_is_organic(df):
     sessions_cr_df = df.copy()
+
     def set_organic(x, is_organic=0):
         if pd.notna(x) and x in ['organic', 'referral', '(none)']:
             is_organic = 1
         return is_organic
+
     sessions_cr_df['is_organic_visit'] = sessions_cr_df['utm_medium'].apply(set_organic)
     sessions_cr_df.drop(columns=['utm_medium'], inplace=True)
     print("get_is_organic Done")
@@ -193,10 +197,12 @@ def add_orientation_vertical(df):
 
 def add_from_russia(df):
     sessions_df_new = df.copy()
+
     def set_from_russia(x, is_russia=0):
         if pd.notna(x) and x == 'Russia':
             is_russia = 1
         return is_russia
+
     sessions_df_new['from_russia'] = sessions_df_new['geo_country'].apply(set_from_russia)
     sessions_df_new.drop(columns=['geo_country'], inplace=True)
     print("add_from_russia Done")
@@ -256,33 +262,33 @@ def get_data_by_cityname(df):
     sessions_withnewdata_df.drop(columns='Name', inplace=True)
 
     # Заменяем пропущенные значения в случае отсутствия соответствия города в full_cities_df
-    sessions_withnewdata_df.fillna({'city_population': full_cities_df['Population'].median(),
-                                    'city_timezone': full_cities_df['Timezone'].median(),
-                                    'city_km_to_moscow': full_cities_df['km_to_moscow'].median()
+    sessions_withnewdata_df.fillna({'city_population': round(full_cities_df['Population'].median()),
+                                    'city_timezone': round(full_cities_df['Timezone'].max()),
+                                    'city_km_to_moscow': round(full_cities_df['km_to_moscow'].median())
                                     }, inplace=True)
 
     # Преобразуем типы столбцов, если это необходимо
     sessions_withnewdata_df['city_population'] = sessions_withnewdata_df['city_population'].astype(int)
 
-    def get_boundaries(datacol):
-        # определение границ выбросов
-        minimum = datacol.mean() - 3 * datacol.std()
-        maximum = datacol.mean() + 3 * datacol.std()
-        boundaries = (minimum, maximum)
-        return boundaries
-
-    boundaries_tz = get_boundaries(sessions_withnewdata_df['city_timezone'])
-    boundaries_kmmsk = get_boundaries(sessions_withnewdata_df['city_km_to_moscow'])
-    # удаляем выбросы ['city_timezone']
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone < boundaries_tz[0]
-                                 ), ['city_timezone']] = round(boundaries_tz[0])
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone > boundaries_tz[1]
-                                 ), ['city_timezone']] = round(boundaries_tz[1])
-    # удаляем выбросы ['city_km_to_moscow']
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow < boundaries_kmmsk[0]
-                                 ), ['city_km_to_moscow']] = round(boundaries_kmmsk[0])
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow > boundaries_kmmsk[1]
-                                 ), ['city_km_to_moscow']] = round(boundaries_kmmsk[1])
+    # def get_boundaries(datacol):
+    #     # определение границ выбросов
+    #     minimum = datacol.mean() - 3 * datacol.std()
+    #     maximum = datacol.mean() + 3 * datacol.std()
+    #     boundaries = (minimum, maximum)
+    #     return boundaries
+    #
+    # boundaries_tz = get_boundaries(sessions_withnewdata_df['city_timezone'])
+    # boundaries_kmmsk = get_boundaries(sessions_withnewdata_df['city_km_to_moscow'])
+    # # удаляем выбросы ['city_timezone']
+    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone < boundaries_tz[0]
+    #                              ), ['city_timezone']] = round(boundaries_tz[0])
+    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone > boundaries_tz[1]
+    #                              ), ['city_timezone']] = round(boundaries_tz[1])
+    # # удаляем выбросы ['city_km_to_moscow']
+    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow < boundaries_kmmsk[0]
+    #                              ), ['city_km_to_moscow']] = round(boundaries_kmmsk[0])
+    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow > boundaries_kmmsk[1]
+    #                              ), ['city_km_to_moscow']] = round(boundaries_kmmsk[1])
 
     print("get_data_by_cityname Done, ", sessions_withnewdata_df.shape)
     return sessions_withnewdata_df
@@ -293,8 +299,8 @@ def main():
 
     data_filters = Pipeline(steps=[
         ('columns_filter', FunctionTransformer(filter_columns)),
-        ('empty_values_standardization', FunctionTransformer(empty_data_standardization)),
-        ('delete_rar_values', FunctionTransformer(change_rar_values)),
+        # ('empty_values_standardization', FunctionTransformer(empty_data_standardization)),
+        # ('delete_rar_values', FunctionTransformer(change_rar_values)),
     ])
 
     data_generators = Pipeline(steps=[
@@ -310,7 +316,7 @@ def main():
     ])
 
     numerical_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='median')),
+        ('imputer', SimpleImputer(strategy='mean')),
         ('std_scaler', StandardScaler())
     ])
 
@@ -323,7 +329,7 @@ def main():
         transformers=[
             ('numerical', numerical_transformer, make_column_selector(dtype_include=['int64', 'float64', 'int8'])),
             ('categorical', categorical_transformer, make_column_selector(dtype_include=[object, 'category']))
-            ])
+        ])
 
     preprocessor = Pipeline(steps=[
         ('filtering', data_filters),
@@ -331,77 +337,115 @@ def main():
         ('columns_transform', col_transformers)
     ])
 
-
-    mymodel = SGDClassifier(
-        loss='log_loss',
-        alpha=0.0001,
-        penalty='l2',
-        random_state=42,
-        learning_rate='optimal',
-        early_stopping=True,
-        eta0=0.01,
-        n_jobs=-1
-    )
-
-
-    # file_model = "model_sgd_clsfr_tunned.pkl"
-    # with open(file_model, 'rb') as pkl_pipe:
-    #     mymodel = dill.load(pkl_pipe)
+    mymodel = SGDClassifier(random_state=42, loss='log_loss', penalty='l2', n_jobs=-1)
 
     pipe = Pipeline(steps=[
         ('preprocessor', preprocessor),
         ('classifier', mymodel)
     ])
 
-    train_data = pd.read_pickle('../tmp/data_to_train_api.pkl')
+    def create_final_dataframes(path_test: str, path_train: str):
+        sessions_df = pd.read_pickle("../data/ga_sessions.pkl")
+        hits_df = pd.read_pickle("../data/ga_hits.pkl")
+
+        # создание колонки о совершение одного из целевых действий
+        target_action_types = (
+        'sub_car_claim_click', 'sub_car_claim_submit_click', 'sub_open_dialog_click', 'sub_custom_question_submit_click',
+        'sub_call_number_click', 'sub_callback_submit_click', 'sub_submit_success', 'sub_car_request_submit_click')
+        hits_df['target_action'] = hits_df['event_action'].apply(lambda x: 1 if x in target_action_types else 0)
+
+        # Создадим датафрейм содержащий session_id и CR (Conversion Rate)
+        session_target_df = hits_df[['session_id', 'target_action']].groupby(['session_id'], as_index=False).max().rename(
+            columns={'target_action': 'conversion_rate'})
+
+        # Обьеденение 2 получившихся датафрейма
+        sessions_cr_df = pd.merge(sessions_df, session_target_df, on='session_id')
+
+        # Разделение датафрейма на обучающую и тестовую выборки
+        sessions_cr_df, finaltest_df = train_test_split(sessions_cr_df, test_size=0.001, random_state=42,
+                                                        stratify=sessions_cr_df['conversion_rate'])
+
+        finaltest_df.to_pickle(path_test)
+        sessions_cr_df.to_pickle(path_train)
+
+        return print(f"DF with 99% data: {path_train} 1% data to test final model {path_test}")
+
+    path_testfinaldf = "../tmp/data_to_test_api.pkl"
+    path_trainfinaldf = "../tmp/data_to_train_api.pkl"
+
+    if not os.path.isfile(path_testfinaldf) and not os.path.isfile(path_trainfinaldf):
+        create_final_dataframes(path_testfinaldf, path_trainfinaldf)
+
+    train_data = pd.read_pickle(path_trainfinaldf)
     train_target = train_data['conversion_rate']
     train_data.drop(columns=['conversion_rate'], inplace=True)
     print(train_data.shape, train_target.shape)
-    pipe.fit(train_data, train_target)
 
 
-    test_df = pd.read_pickle('../tmp/data_to_test_api.pkl')
+    # Использую только для выявления лучших гиперпараметров
+    def hyper_param_tunning(pipe, train_data, train_target):
+        # При необходимости можно прогнать pipe чтобы получить модель с оптимальными настройки Гиперпараметров
+        # Эта функция использовалась для настройки гиперпараметров уже выбранной модели.
+
+        # сетка для оптимизации Гипер Параметров выбранной модели
+        param_grid = {
+            'classifier__alpha': [0.0001, 0.001, 0.00001],
+            # 'classifier__penalty': ['l2', 'l1', 'elasticnet'],
+            'classifier__max_iter': [1000, 2000, 3000],
+            # 'classifier__early_stopping': [True, False],
+            'classifier__class_weight': [{0: 1, 1: 10}, {0: 1, 1: 2}, {0: 0.5, 1: 20}, {0: 0.51, 1: 17.22},
+                                         {0: 0.1, 1: 0.34}]
+        }
+
+        rnd_search = RandomizedSearchCV(pipe, param_grid, n_iter=10, cv=5, scoring='roc_auc', n_jobs=-1, random_state=42)
+
+        # Обучение модели с оптимизацией гиперпараметров
+        rnd_search.fit(train_data, train_target)
+
+
+        # Лучшие параметры
+        print("Лучшие параметры: ", rnd_search.best_params_)
+
+        # Лучший классификатор
+        best_model = rnd_search.best_estimator_
+
+        return best_model
+
+
+
+    best_model = pipe.set_params(**{'classifier__max_iter': 3000,
+                                  'classifier__class_weight': {0: 0.5, 1: 20},
+                                  'classifier__alpha': 0.0001})
+
+    best_model.fit(train_data, train_target)
+
+
+    # Тестирование модели
+    test_df = pd.read_pickle(path_testfinaldf)
     y = test_df['conversion_rate']
     X = test_df.drop(columns=['conversion_rate'])
 
     # Предсказания вероятностей для тестового набора
-    y_pred_proba = pipe.predict_proba(X)[:, 1]
+    y_pred_proba = best_model.predict_proba(X)[:, 1]
 
     # Оценка модели с использованием ROC-AUC
     roc_auc = roc_auc_score(y, y_pred_proba)
     print(f'ROC-AUC Score: {roc_auc:.4f}')
 
-
-
     dump_data = {
-        'model': pipe,
+        'model': best_model,
         'metadata': {
             'name': 'fitted model to predict conversion rate',
             'author': 'Said Platonov',
             'version': 1,
             'date': datetime.datetime.now(),
-            'type': type(pipe.named_steps["classifier"]).__name__,
+            'type': type(best_model.named_steps["classifier"]).__name__,
             'ROC_AUC': roc_auc
         }
     }
     file_name = 'model_pipe.pkl'
     with open(file_name, 'wb') as file:
         dill.dump(dump_data, file)
-
-    #
-    # # ТЕСТ - надо сделать predict используя сформированный тут pipe
-    # # Отрываем csv с данными
-    # test_df = pd.read_pickle('../tmp/data_to_test_api.pkl')
-    # # print(test_df)
-    # y = test_df['conversion_rate']
-    # X = test_df.drop(columns=['conversion_rate'])
-    #
-    # # Предсказания вероятностей для тестового набора
-    # y_pred_proba = pipe.predict_proba(X)[:, 1]
-    #
-    # # Оценка модели с использованием ROC-AUC
-    # roc_auc = roc_auc_score(y, y_pred_proba)
-    # print(f'ROC-AUC Score: {roc_auc:.4f}')
 
 
 if __name__ == '__main__':

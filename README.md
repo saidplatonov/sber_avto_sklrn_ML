@@ -6,6 +6,6 @@
 Project structure:<br>
 ![image](https://github.com/saidplatonov/sber_avto_sklrn_ML/assets/170549436/8e53bfde-607c-4f02-8768-7da10aa2dfeb)
 <br>
-research_result.ipynb - Файл иследования и создания обученной модели (с заметками и комментариями)
+research_result.ipynb - Проведенные иследования данных и подбор моделей (с заметками и комментариями)
 
 

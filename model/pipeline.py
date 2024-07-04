@@ -11,7 +11,7 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.compose import make_column_selector
-from sklearn.linear_model import SGDClassifier
+from sklearn.linear_model import SGDClassifier, LogisticRegression
 from sklearn.model_selection import RandomizedSearchCV, train_test_split
 
 # Metrics
@@ -270,25 +270,25 @@ def get_data_by_cityname(df):
     # Преобразуем типы столбцов, если это необходимо
     sessions_withnewdata_df['city_population'] = sessions_withnewdata_df['city_population'].astype(int)
 
-    # def get_boundaries(datacol):
-    #     # определение границ выбросов
-    #     minimum = datacol.mean() - 3 * datacol.std()
-    #     maximum = datacol.mean() + 3 * datacol.std()
-    #     boundaries = (minimum, maximum)
-    #     return boundaries
-    #
-    # boundaries_tz = get_boundaries(sessions_withnewdata_df['city_timezone'])
-    # boundaries_kmmsk = get_boundaries(sessions_withnewdata_df['city_km_to_moscow'])
-    # # удаляем выбросы ['city_timezone']
-    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone < boundaries_tz[0]
-    #                              ), ['city_timezone']] = round(boundaries_tz[0])
-    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone > boundaries_tz[1]
-    #                              ), ['city_timezone']] = round(boundaries_tz[1])
-    # # удаляем выбросы ['city_km_to_moscow']
-    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow < boundaries_kmmsk[0]
-    #                              ), ['city_km_to_moscow']] = round(boundaries_kmmsk[0])
-    # sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow > boundaries_kmmsk[1]
-    #                              ), ['city_km_to_moscow']] = round(boundaries_kmmsk[1])
+    def get_boundaries(datacol):
+        # определение границ выбросов
+        minimum = datacol.mean() - 3 * datacol.std()
+        maximum = datacol.mean() + 3 * datacol.std()
+        boundaries = (minimum, maximum)
+        return boundaries
+
+    boundaries_tz = get_boundaries(sessions_withnewdata_df['city_timezone'])
+    boundaries_kmmsk = get_boundaries(sessions_withnewdata_df['city_km_to_moscow'])
+    # удаляем выбросы ['city_timezone']
+    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone < boundaries_tz[0]
+                                 ), ['city_timezone']] = round(boundaries_tz[0])
+    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone > boundaries_tz[1]
+                                 ), ['city_timezone']] = round(boundaries_tz[1])
+    # удаляем выбросы ['city_km_to_moscow']
+    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow < boundaries_kmmsk[0]
+                                 ), ['city_km_to_moscow']] = round(boundaries_kmmsk[0])
+    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow > boundaries_kmmsk[1]
+                                 ), ['city_km_to_moscow']] = round(boundaries_kmmsk[1])
 
     print("get_data_by_cityname Done, ", sessions_withnewdata_df.shape)
     return sessions_withnewdata_df
@@ -333,7 +333,7 @@ def main():
 
     preprocessor = Pipeline(steps=[
         ('filtering', data_filters),
-        ('generator', data_generators),
+        # ('generator', data_generators),  #6823
         ('columns_transform', col_transformers)
     ])
 
@@ -382,7 +382,7 @@ def main():
     print(train_data.shape, train_target.shape)
 
 
-    # Использую только для выявления лучших гиперпараметров
+    # Использую при выявление гиперпараметров
     def hyper_param_tunning(pipe, train_data, train_target):
         # При необходимости можно прогнать pipe чтобы получить модель с оптимальными настройки Гиперпараметров
         # Эта функция использовалась для настройки гиперпараметров уже выбранной модели.
@@ -412,10 +412,10 @@ def main():
         return best_model
 
 
-
     best_model = pipe.set_params(**{'classifier__max_iter': 3000,
                                   'classifier__class_weight': {0: 0.5, 1: 20},
-                                  'classifier__alpha': 0.0001})
+                                  'classifier__alpha': 0.0001
+                                    })
 
     best_model.fit(train_data, train_target)
 

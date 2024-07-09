@@ -33,6 +33,7 @@ def filter_columns(df):
 
 
 def empty_data_standardization(df):
+    import numpy as np
     df_new = df.copy()
     df_new.replace(['(not set)', ''], np.nan, inplace=True)
     print("empty_data_standardization Done")
@@ -42,7 +43,7 @@ def empty_data_standardization(df):
 def change_rar_values(df):
     sessions_df_cleaned = df.copy()
 
-    min_rarity = sessions_df_cleaned.shape[0] / 1000000  # 0.001
+    min_rarity = sessions_df_cleaned.shape[0] / 1000  # 0.1%
 
     column_to_update = ['utm_source', 'utm_campaign', 'utm_adcontent', 'utm_keyword',
                         'device_category', 'device_os', 'device_brand', 'device_browser',
@@ -130,6 +131,7 @@ def get_is_organic(df):
     sessions_cr_df = df.copy()
 
     def set_organic(x, is_organic=0):
+        import pandas as pd
         if pd.notna(x) and x in ['organic', 'referral', '(none)']:
             is_organic = 1
         return is_organic
@@ -147,24 +149,8 @@ def add_screan_width_height(df):
     sessions_df_cleaned['device_screen_height'] = sessions_df_cleaned['device_screen_resolution'].apply(
         lambda h: int(h.lower().split('x')[1]))
 
-    def get_boundaries(datacol):
-        # функция определения границ выбросов
-        minimum = datacol.mean() - 3 * datacol.std()
-        maximum = datacol.mean() + 3 * datacol.std()
-        boundaries = (minimum, maximum)
-        return boundaries
 
-    boundaries_w = get_boundaries(sessions_df_cleaned['device_screen_width'])
-    boundaries_h = get_boundaries(sessions_df_cleaned['device_screen_height'])
-    sessions_df_cleaned.loc[
-        (sessions_df_cleaned.device_screen_width < boundaries_w[0]), ['device_screen_width']] = round(boundaries_w[0])
-    sessions_df_cleaned.loc[
-        (sessions_df_cleaned.device_screen_width > boundaries_w[1]), ['device_screen_width']] = round(boundaries_w[1])
-
-    sessions_df_cleaned.loc[
-        (sessions_df_cleaned.device_screen_height < boundaries_h[0]), ['device_screen_height']] = round(boundaries_h[0])
-    sessions_df_cleaned.loc[
-        (sessions_df_cleaned.device_screen_height > boundaries_h[1]), ['device_screen_height']] = round(boundaries_h[1])
+    sessions_df_cleaned.drop(columns=['device_screen_resolution'], inplace=True)
     print("add_screan_width_height Done")
     return sessions_df_cleaned
 
@@ -199,6 +185,8 @@ def add_from_russia(df):
     sessions_df_new = df.copy()
 
     def set_from_russia(x, is_russia=0):
+        import pandas as pd
+
         if pd.notna(x) and x == 'Russia':
             is_russia = 1
         return is_russia
@@ -210,13 +198,20 @@ def add_from_russia(df):
 
 
 def get_data_by_cityname(df):
+    import pandas as pd
+    import os
+    # project_dir = os.path.join('~', 'configuration.conf')
     sessions_df_new = df.copy()
 
     # Так как услугу автоподписки целесообразна только для России, приравняем все города кроме Российских к 'other'
     sessions_df_new.loc[sessions_df_new['from_russia'] == 0, 'geo_city'] = 'other'
 
     # Откроем ранее созданный файл с данными о Российских городах
-    full_cities_df = pd.read_csv("../cities_data/full_ru_cities_data.csv")
+    if __name__ == '__main__':
+        pathdir = "../"
+    else:
+        pathdir = "./"
+    full_cities_df = pd.read_csv(f"{pathdir}/cities_data/full_ru_cities_data.csv")
 
     def expand_rows(row):
         """
@@ -237,6 +232,7 @@ def get_data_by_cityname(df):
             new_row['Name'] = name.strip()
             rows.append(new_row)
         return rows
+
 
     # Применение функции ко всем строкам датафрейма и объединение результата
     expanded_rows = full_cities_df.apply(lambda row: expand_rows(row), axis=1)
@@ -270,25 +266,6 @@ def get_data_by_cityname(df):
     # Преобразуем типы столбцов, если это необходимо
     sessions_withnewdata_df['city_population'] = sessions_withnewdata_df['city_population'].astype(int)
 
-    def get_boundaries(datacol):
-        # определение границ выбросов
-        minimum = datacol.mean() - 3 * datacol.std()
-        maximum = datacol.mean() + 3 * datacol.std()
-        boundaries = (minimum, maximum)
-        return boundaries
-
-    boundaries_tz = get_boundaries(sessions_withnewdata_df['city_timezone'])
-    boundaries_kmmsk = get_boundaries(sessions_withnewdata_df['city_km_to_moscow'])
-    # удаляем выбросы ['city_timezone']
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone < boundaries_tz[0]
-                                 ), ['city_timezone']] = round(boundaries_tz[0])
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_timezone > boundaries_tz[1]
-                                 ), ['city_timezone']] = round(boundaries_tz[1])
-    # удаляем выбросы ['city_km_to_moscow']
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow < boundaries_kmmsk[0]
-                                 ), ['city_km_to_moscow']] = round(boundaries_kmmsk[0])
-    sessions_withnewdata_df.loc[(sessions_withnewdata_df.city_km_to_moscow > boundaries_kmmsk[1]
-                                 ), ['city_km_to_moscow']] = round(boundaries_kmmsk[1])
 
     print("get_data_by_cityname Done, ", sessions_withnewdata_df.shape)
     return sessions_withnewdata_df
@@ -299,8 +276,8 @@ def main():
 
     data_filters = Pipeline(steps=[
         ('columns_filter', FunctionTransformer(filter_columns)),
-        # ('empty_values_standardization', FunctionTransformer(empty_data_standardization)),
-        # ('delete_rar_values', FunctionTransformer(change_rar_values)),
+        ('empty_values_standardization', FunctionTransformer(empty_data_standardization)),
+        # ('delete_rar_values', FunctionTransformer(change_rar_values)),  # bad impact
     ])
 
     data_generators = Pipeline(steps=[
@@ -309,10 +286,10 @@ def main():
         ('organic_visitor_definition', FunctionTransformer(get_is_organic)),
         ('add_screen_width_height', FunctionTransformer(add_screan_width_height)),
         ('get_social_media_ad', FunctionTransformer(add_is_socialmedia_advert)),
-        ('add_device_display_megapixel', FunctionTransformer(add_display_megapixel)),
-        ('add_display_orientation', FunctionTransformer(add_orientation_vertical)),
+        # ('add_device_display_megapixel', FunctionTransformer(add_display_megapixel)), # bad impact to roc_auc
+        # ('add_display_orientation', FunctionTransformer(add_orientation_vertical)),  # micro-bad impact to roc_auc
         ('add_from_russia', FunctionTransformer(add_from_russia)),
-        ('city_data_generator', FunctionTransformer(get_data_by_cityname)),
+        # ('city_data_generator', FunctionTransformer(get_data_by_cityname)), # bad impact to roc_auc
     ])
 
     numerical_transformer = Pipeline(steps=[
@@ -333,7 +310,7 @@ def main():
 
     preprocessor = Pipeline(steps=[
         ('filtering', data_filters),
-        # ('generator', data_generators),  #6823
+        ('generator', data_generators),
         ('columns_transform', col_transformers)
     ])
 
@@ -418,7 +395,6 @@ def main():
                                     })
 
     best_model.fit(train_data, train_target)
-
 
     # Тестирование модели
     test_df = pd.read_pickle(path_testfinaldf)

@@ -10,6 +10,7 @@ Project structure:<br>
 ./cities_data = Здесь распологают дополнительная информация о городах России, эти данные обработаны в JupyterNoutbook на выходе полчен DataFrame с данными которые мы можем использовать для генерации новых фитч.<br>
 ./cities_data/full_ru_cities_data.csv - Обработанные данные о городах россии для генерации новых фитч.<br>
 ./model/pipeline.py - Генератор model_pipeline.pkl модель которую мы в дальнейшем будем использовать в API<br>
+./main.py - REST API сервис
 
 
 

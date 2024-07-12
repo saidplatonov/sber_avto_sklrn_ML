@@ -14,8 +14,12 @@ from sklearn.compose import make_column_selector
 from sklearn.linear_model import SGDClassifier, LogisticRegression
 from sklearn.model_selection import RandomizedSearchCV, train_test_split
 
+from sklearn.utils import resample
+
 # Metrics
 from sklearn.metrics import roc_auc_score
+
+
 
 
 def filter_columns(df):
@@ -240,6 +244,8 @@ def get_data_by_cityname(df):
     # Использование explode для распаковки списков в строки DataFrame
     full_cities_df = pd.DataFrame([item for sublist in expanded_rows for item in sublist]).reset_index(drop=True)
 
+    # full_cities_df.sort_values(by='Timezone', inplace=True)
+
     full_cities_df.drop_duplicates(subset=['Name'], keep=False, inplace=True)
     """
     Объединяем DataFrame sessions_df_new с full_cities_df по столбцу 'geo_city'
@@ -257,18 +263,23 @@ def get_data_by_cityname(df):
 
     sessions_withnewdata_df.drop(columns='Name', inplace=True)
 
-    # Заменяем пропущенные значения в случае отсутствия соответствия города в full_cities_df
-    sessions_withnewdata_df.fillna({'city_population': round(full_cities_df['Population'].median()),
-                                    'city_timezone': round(full_cities_df['Timezone'].max()),
-                                    'city_km_to_moscow': round(full_cities_df['km_to_moscow'].median())
-                                    }, inplace=True)
-
-    # Преобразуем типы столбцов, если это необходимо
-    sessions_withnewdata_df['city_population'] = sessions_withnewdata_df['city_population'].astype(int)
-
 
     print("get_data_by_cityname Done, ", sessions_withnewdata_df.shape)
     return sessions_withnewdata_df
+
+def add_from_mscow(df):
+    new_df = df.copy()
+    def set_from_moscow(x, is_moscow=0):
+        import pandas as pd
+
+        if pd.notna(x) and x == 'Moscow':
+            is_moscow = 1
+        return is_moscow
+
+    new_df['from_moscow'] = new_df['geo_city'].apply(set_from_moscow)
+
+    new_df.drop(columns=['geo_city'], inplace=True)
+    return new_df
 
 
 def main():
@@ -289,7 +300,8 @@ def main():
         # ('add_device_display_megapixel', FunctionTransformer(add_display_megapixel)), # bad impact to roc_auc
         # ('add_display_orientation', FunctionTransformer(add_orientation_vertical)),  # micro-bad impact to roc_auc
         ('add_from_russia', FunctionTransformer(add_from_russia)),
-        # ('city_data_generator', FunctionTransformer(get_data_by_cityname)), # bad impact to roc_auc
+        ('city_data_generator', FunctionTransformer(get_data_by_cityname)),
+        ('drop_columns', FunctionTransformer(add_from_mscow))
     ])
 
     numerical_transformer = Pipeline(steps=[
@@ -338,8 +350,27 @@ def main():
         # Обьеденение 2 получившихся датафрейма
         sessions_cr_df = pd.merge(sessions_df, session_target_df, on='session_id')
 
+
+        # Разделяем данные по классам
+        df_majority = sessions_cr_df[sessions_cr_df['conversion_rate'] == 0]
+        df_minority = sessions_cr_df[sessions_cr_df['conversion_rate'] == 1]
+
+        # Даунсемплинг мажоритарного класса до количества примеров в миноритарном классе
+        df_majority_downsampled = resample(df_majority,
+                                           replace=False,  # Без замены
+                                           n_samples=len(df_minority),
+                                           # До количества примеров миноритарного класса
+                                           random_state=42)  # Для воспроизводимости
+
+        # Комбинируем сбалансированные данные
+        sessions_cr_df = pd.concat([df_majority_downsampled, df_minority])
+
+        # Перемешиваем данные и сбрасываем индексы
+        sessions_cr_df = sessions_cr_df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+
         # Разделение датафрейма на обучающую и тестовую выборки
-        sessions_cr_df, finaltest_df = train_test_split(sessions_cr_df, test_size=0.001, random_state=42,
+        sessions_cr_df, finaltest_df = train_test_split(sessions_cr_df, test_size=0.01, random_state=42,
                                                         stratify=sessions_cr_df['conversion_rate'])
 
         finaltest_df.to_pickle(path_test)
@@ -367,14 +398,31 @@ def main():
         # сетка для оптимизации Гипер Параметров выбранной модели
         param_grid = {
             'classifier__alpha': [0.0001, 0.001, 0.00001],
-            # 'classifier__penalty': ['l2', 'l1', 'elasticnet'],
+            'classifier__penalty': ['elasticnet'],#['l2', 'elasticnet'],
+            'classifier__learning_rate': ['invscaling', 'adaptive'],
             'classifier__max_iter': [1000, 2000, 3000],
-            # 'classifier__early_stopping': [True, False],
-            'classifier__class_weight': [{0: 1, 1: 10}, {0: 1, 1: 2}, {0: 0.5, 1: 20}, {0: 0.51, 1: 17.22},
-                                         {0: 0.1, 1: 0.34}]
-        }
+            'classifier__early_stopping': [True, False],
+            'classifier__eta0': [0.01, 1, 3],
+            'classifier__tol': [1e-3, 1e-4, 1e-5],
 
-        rnd_search = RandomizedSearchCV(pipe, param_grid, n_iter=10, cv=5, scoring='roc_auc', n_jobs=-1, random_state=42)
+        }
+        # param_grid = {
+        #                 'classifier__loss': ['hinge', 'log_loss', 'modified_huber', 'perceptron'],
+        #                 'classifier__penalty': ['none', 'l2', 'l1', 'elasticnet'],
+        #                 'classifier__alpha': np.logspace(-4, 0, 50),
+        #                 'classifier__max_iter': [1000, 2000, 3000, 4000, 5000],
+        #                 'classifier__tol': [1e-3, 1e-4, 1e-5],
+        #                 'classifier__learning_rate': ['constant', 'optimal', 'invscaling', 'adaptive'],
+        #                 'classifier__eta0': np.logspace(-3, 0, 50)  # Только используется при 'learning_rate': 'constant', 'invscaling', или 'adaptive'
+        #             }
+        # 0.6729 {'classifier__tol': 0.0001, 'classifier__penalty': 'elasticnet', 'classifier__max_iter': 3000, 'classifier__learning_rate': 'adaptive', 'classifier__eta0': 10, 'classifier__early_stopping': False, 'classifier__alpha': 1e-05}
+        # 0.6704 {'classifier__penalty': 'elasticnet', 'classifier__max_iter': 3000, 'classifier__learning_rate': 'adaptive', 'classifier__eta0': 1, 'classifier__early_stopping': True, 'classifier__alpha': 0.0001}
+        # 0.6753 {'classifier__penalty': 'elasticnet', 'classifier__max_iter': 2000, 'classifier__learning_rate': 'invscaling', 'classifier__eta0': 1, 'classifier__early_stopping': True, 'classifier__alpha': 0.00001}
+        # 0.6718 {'classifier__tol': 0.0001, 'classifier__penalty': 'elasticnet', 'classifier__max_iter': 1000, 'classifier__learning_rate': 'adaptive', 'classifier__eta0': 0.01, 'classifier__early_stopping': False, 'classifier__alpha': 1e-05}
+        # 0.6737 {{'classifier__tol': 1e-05, 'classifier__penalty': 'elasticnet', 'classifier__max_iter': 2000, 'classifier__learning_rate': 'adaptive', 'classifier__eta0': 3, 'classifier__early_stopping': True, 'classifier__alpha': 1e-05}}
+        # 0.6753 {'classifier__tol': 1e-05, 'classifier__penalty': 'elasticnet', 'classifier__max_iter': 2000, 'classifier__learning_rate': 'adaptive', 'classifier__eta0': 1, 'classifier__early_stopping': False, 'classifier__alpha': 1e-05}
+
+        rnd_search = RandomizedSearchCV(pipe, param_grid, n_iter=50, cv=4, scoring='roc_auc', n_jobs=-1, random_state=42)
 
         # Обучение модели с оптимизацией гиперпараметров
         rnd_search.fit(train_data, train_target)
@@ -388,12 +436,12 @@ def main():
 
         return best_model
 
+    # best_model = hyper_param_tunning(pipe, train_data, train_target)\
 
-    best_model = pipe.set_params(**{'classifier__max_iter': 3000,
-                                  'classifier__class_weight': {0: 0.5, 1: 20},
-                                  'classifier__alpha': 0.0001
-                                    })
-
+    best_model = pipe.set_params(
+        **{'classifier__tol': 1e-05, 'classifier__penalty': 'elasticnet', 'classifier__max_iter': 2000,
+           'classifier__learning_rate': 'adaptive', 'classifier__eta0': 1, 'classifier__early_stopping': False,
+           'classifier__alpha': 1e-05})
     best_model.fit(train_data, train_target)
 
     # Тестирование модели
@@ -413,7 +461,7 @@ def main():
         'metadata': {
             'name': 'fitted model to predict conversion rate',
             'author': 'Said Platonov',
-            'version': 1,
+            'version': 2,
             'date': datetime.datetime.now(),
             'type': type(best_model.named_steps["classifier"]).__name__,
             'ROC_AUC': roc_auc
